@@ -3,6 +3,8 @@ package com.starlwr.bot.core.enums;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
+import java.util.Locale;
+
 /**
  * 推送目标类型
  */
@@ -24,5 +26,23 @@ public enum PushTargetType {
         }
 
         return UNKNOWN;
+    }
+
+    /**
+     * Parses the JSON data-source representation while retaining numeric compatibility.
+     */
+    public static PushTargetType fromConfigValue(Object value) {
+        if (value instanceof Number number) {
+            return of(number.intValue());
+        }
+        if (!(value instanceof String string)) {
+            return UNKNOWN;
+        }
+
+        return switch (string.trim().toLowerCase(Locale.ROOT)) {
+            case "0", "friend", "private", "user", "好友", "私聊" -> FRIEND;
+            case "1", "group", "群", "群聊" -> GROUP;
+            default -> UNKNOWN;
+        };
     }
 }
