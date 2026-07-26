@@ -3,6 +3,7 @@ package com.starlwr.bot.core.plugin;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import com.starlwr.bot.core.plugin.web.PluginWebManifest;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -24,6 +25,8 @@ public class StarBotPlugin {
      * 插件元数据
      */
     private StarBotPluginMeta meta;
+
+    private PluginWebManifest webManifest;
 
     /**
      * 依赖列表

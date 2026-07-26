@@ -2,6 +2,8 @@ package com.starlwr.bot.core.plugin;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.starlwr.bot.core.plugin.web.PluginWebManifest;
+import com.starlwr.bot.core.plugin.web.PluginWebPermissions;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -67,6 +69,8 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
 
     private final Pattern jarPattern = Pattern.compile("^(.+)-([\\d.]+[\\w.-]*)\\.jar$");
 
+    private static final Pattern WEB_ALIAS_PATTERN = Pattern.compile("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$");
+
     @Override
     public void setEnvironment(@NonNull Environment environment) {
         this.environment = environment;
@@ -125,6 +129,11 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
                                 String json = new String(input.readAllBytes(), StandardCharsets.UTF_8);
                                 plugin.setMeta(JSON.parseObject(json, StarBotPluginMeta.class));
                             }
+                        } else if ("starbot-web.json".equals(entry.getName())) {
+                            try (InputStream input = jarFile.getInputStream(entry)) {
+                                String json = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+                                plugin.setWebManifest(JSON.parseObject(json, PluginWebManifest.class));
+                            }
                         } else if ("dependency.json".equals(entry.getName())) {
                             try (InputStream input = jarFile.getInputStream(entry)) {
                                 String json = new String(input.readAllBytes(), StandardCharsets.UTF_8);
@@ -155,6 +164,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
         }
 
         sortPlugins();
+        validateWebManifests();
 
         if (needDownloadDependencies.values().stream().allMatch(List::isEmpty)) {
             log.info("开始加载 StarBot 插件");
@@ -257,6 +267,46 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
             log.info("没有需要加载的 StarBot 插件");
         } else {
             log.info("成功加载了 {} 个 StarBot 插件", plugins.size());
+        }
+    }
+
+    public Optional<StarBotPlugin> findPluginByComponent(Class<?> componentClass) {
+        return plugins.stream().filter(plugin -> plugin.getComponentClasses().contains(componentClass)).findFirst();
+    }
+
+    public Optional<StarBotPlugin> findPluginByWebAlias(String alias) {
+        return plugins.stream()
+                .filter(plugin -> plugin.getWebManifest() != null)
+                .filter(plugin -> Objects.equals(plugin.getWebManifest().getAlias(), alias))
+                .findFirst();
+    }
+
+    private void validateWebManifests() {
+        Set<String> aliases = new HashSet<>();
+        for (StarBotPlugin plugin : plugins) {
+            PluginWebManifest manifest = plugin.getWebManifest();
+            if (manifest == null) {
+                continue;
+            }
+            String alias = manifest.getAlias() == null ? "" : manifest.getAlias().trim();
+            String root = manifest.getWebRoot() == null ? "" : manifest.getWebRoot().trim();
+            boolean valid = WEB_ALIAS_PATTERN.matcher(alias).matches()
+                    && !root.isBlank()
+                    && !root.startsWith("/")
+                    && !root.contains("..")
+                    && aliases.add(alias)
+                    && PluginWebPermissions.KNOWN.containsAll(manifest.getPermissions());
+            if (!valid) {
+                log.error("插件 {} 的 starbot-web.json 无效或存在冲突，Web 路由不会注册: alias={}, root={}, permissions={}",
+                        plugin.getId(), alias, root, manifest.getPermissions());
+                plugin.setWebManifest(null);
+                continue;
+            }
+            manifest.setAlias(alias);
+            manifest.setWebRoot(root.replace('\\', '/').replaceAll("/+$", ""));
+            manifest.setPermissions(List.copyOf(manifest.getPermissions()));
+            log.info("已注册插件 WebRoot: plugin={}, path=/plugins/{}/, permissions={}",
+                    plugin.getId(), alias, manifest.getPermissions());
         }
     }
 
