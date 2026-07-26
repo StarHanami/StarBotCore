@@ -2,6 +2,7 @@ package com.starlwr.bot.core.service;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.starlwr.bot.core.config.StarBotCoreProperties;
+import jakarta.annotation.PreDestroy;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -93,6 +94,11 @@ public class DefaultLiveDataService implements LiveDataService {
             }
 
         }, interval, interval, TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    public void close() {
+        scheduler.shutdownNow();
     }
 
     // ================ 直播间状态 ================
