@@ -36,7 +36,9 @@ public class ColorConverter implements Converter<String, Color> {
                 return new Color(r, g, b);
             }
 
-            if (value.startsWith("#")) {
+            if (value.matches("#[0-9a-fA-F]{8}")) {
+                return new Color((int) Long.parseLong(value.substring(1), 16), true);
+            } else if (value.startsWith("#")) {
                 return Color.decode(value);
             } else if (value.matches("[0-9a-fA-F]{6}")) {
                 return Color.decode("#" + value);
