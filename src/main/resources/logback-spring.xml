@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
 
     <springProperty scope="context" name="consoleLogLevel" source="starbot.core.log.console" defaultValue="INFO"/>
     <springProperty scope="context" name="fileLogLevel" source="starbot.core.log.file" defaultValue="INFO"/>
@@ -13,7 +14,7 @@
             <level>${consoleLogLevel}</level>
         </filter>
         <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-            <pattern>%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5p) %clr([%-20.20t]){faint} %clr(%-40.40logger{39}){cyan}: %msg%n%ex</pattern>
+            <pattern>%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5p) %clr(${PID:- }){magenta} --- [%clr(%20.20t)] %clr(%-40.40logger{39}){cyan} : %msg%n%ex</pattern>
             <charset>utf-8</charset>
         </encoder>
     </appender>
