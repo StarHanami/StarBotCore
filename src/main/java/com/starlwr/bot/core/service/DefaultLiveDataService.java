@@ -22,6 +22,9 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
 /**
  * 默认直播数据服务实现
@@ -32,6 +35,16 @@ public class DefaultLiveDataService implements LiveDataService {
     private final StarBotCoreProperties properties;
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+    private final ReentrantReadWriteLock cacheLock = new ReentrantReadWriteLock();
+
+    private final Lock cacheReadLock = cacheLock.readLock();
+
+    private final Lock cacheWriteLock = cacheLock.writeLock();
+
+    private final Object saveMonitor = new Object();
+
+    private volatile boolean closing;
 
     private JSONObject cache = new JSONObject();
 
@@ -55,7 +68,10 @@ public class DefaultLiveDataService implements LiveDataService {
             String liveDataPath = properties.getLive().getLiveDataPath();
             log.info("开始从 {} 中加载直播数据", liveDataPath);
             try {
-                cache = JSONObject.parseObject(Files.readString(Path.of(liveDataPath)));
+                JSONObject loadedCache = JSONObject.parseObject(Files.readString(Path.of(liveDataPath)));
+                writeCache(() -> {
+                    cache = loadedCache;
+                });
             } catch (NoSuchFileException e) {
                 log.warn("直播数据文件 {} 不存在, 建立新文件", liveDataPath);
             } catch (Exception e) {
@@ -72,15 +88,18 @@ public class DefaultLiveDataService implements LiveDataService {
     @Order(0)
     @EventListener(ContextClosedEvent.class)
     public void onContextClosedEvent() {
-        if (cache.isEmpty()) {
-            return;
-        }
+        closing = true;
+        scheduler.shutdown();
 
         if (properties.getLive().isSaveLiveData()) {
             String liveDataPath = properties.getLive().getLiveDataPath();
             log.info("开始保存直播数据至 {}", liveDataPath);
             try {
-                Files.writeString(Path.of(liveDataPath), cache.toJSONString());
+                boolean saved = saveCache(Path.of(liveDataPath), true, true);
+                if (!saved) {
+                    log.error("保存直播数据至 {} 失败", liveDataPath);
+                    return;
+                }
             } catch (Exception e) {
                 log.error("保存直播数据至 {} 异常", liveDataPath, e);
             }
@@ -96,12 +115,73 @@ public class DefaultLiveDataService implements LiveDataService {
             Thread.currentThread().setName("auto-save-data");
 
             try {
-                Files.writeString(path, cache.toJSONString());
+                saveCache(path, false, false);
             } catch (Exception e) {
                 log.error("自动保存直播数据异常", e);
             }
 
         }, interval, interval, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 将当前缓存保存到指定路径
+     *
+     * @param path         保存路径
+     * @param closingSave  是否为关闭时的最终保存
+     * @param skipIfEmpty  缓存为空时是否跳过保存
+     * @return 是否实际写入文件
+     * @throws Exception 序列化或写入异常
+     */
+    private boolean saveCache(Path path, boolean closingSave, boolean skipIfEmpty) throws Exception {
+        synchronized (saveMonitor) {
+            if (closing && !closingSave) {
+                return false;
+            }
+
+            String json = readCache(() -> skipIfEmpty && cache.isEmpty() ? null : cache.toJSONString());
+            if (json == null) {
+                return false;
+            }
+
+            Files.writeString(path, json);
+            return true;
+        }
+    }
+
+    /**
+     * 在缓存读锁内执行操作
+     */
+    private <T> T readCache(Supplier<T> action) {
+        cacheReadLock.lock();
+        try {
+            return action.get();
+        } finally {
+            cacheReadLock.unlock();
+        }
+    }
+
+    /**
+     * 在缓存写锁内执行有返回值的操作
+     */
+    private <T> T writeCache(Supplier<T> action) {
+        cacheWriteLock.lock();
+        try {
+            return action.get();
+        } finally {
+            cacheWriteLock.unlock();
+        }
+    }
+
+    /**
+     * 在缓存写锁内执行操作
+     */
+    private void writeCache(Runnable action) {
+        cacheWriteLock.lock();
+        try {
+            action.run();
+        } finally {
+            cacheWriteLock.unlock();
+        }
     }
 
     // ================ 直播间状态 ================
@@ -115,9 +195,11 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public void setLiveStatus(@NonNull String platform, @NonNull Long uid, boolean status) {
-        JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
-        JSONObject statusCache = (JSONObject) platformCache.computeIfAbsent("LiveStatus", k -> new JSONObject());
-        statusCache.put(String.valueOf(uid), status);
+        writeCache(() -> {
+            JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
+            JSONObject statusCache = (JSONObject) platformCache.computeIfAbsent("LiveStatus", k -> new JSONObject());
+            statusCache.put(String.valueOf(uid), status);
+        });
     }
 
     /**
@@ -129,9 +211,9 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public Optional<Boolean> getLiveStatus(@NonNull String platform, @NonNull Long uid) {
-        return Optional.ofNullable(cache.getJSONObject(platform))
+        return readCache(() -> Optional.ofNullable(cache.getJSONObject(platform))
                 .map(platformCache -> platformCache.getJSONObject("LiveStatus"))
-                .map(statusCache -> statusCache.getBoolean(String.valueOf(uid)));
+                .map(statusCache -> statusCache.getBoolean(String.valueOf(uid))));
     }
 
     // ================ 直播开始时间 ================
@@ -145,9 +227,11 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public void setLiveStartTime(@NonNull String platform, @NonNull Long uid, long startTime) {
-        JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
-        JSONObject timeCache = (JSONObject) platformCache.computeIfAbsent("LiveStartTime", k -> new JSONObject());
-        timeCache.put(String.valueOf(uid), startTime);
+        writeCache(() -> {
+            JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
+            JSONObject timeCache = (JSONObject) platformCache.computeIfAbsent("LiveStartTime", k -> new JSONObject());
+            timeCache.put(String.valueOf(uid), startTime);
+        });
     }
 
     /**
@@ -159,9 +243,9 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public Optional<Long> getLiveStartTime(@NonNull String platform, @NonNull Long uid) {
-        return Optional.ofNullable(cache.getJSONObject(platform))
+        return readCache(() -> Optional.ofNullable(cache.getJSONObject(platform))
                 .map(platformCache -> platformCache.getJSONObject("LiveStartTime"))
-                .map(timeCache -> timeCache.getLong(String.valueOf(uid)));
+                .map(timeCache -> timeCache.getLong(String.valueOf(uid))));
     }
 
     // ================ 直播结束时间 ================
@@ -175,9 +259,11 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public void setLiveEndTime(@NonNull String platform, @NonNull Long uid, long endTime) {
-        JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
-        JSONObject timeCache = (JSONObject) platformCache.computeIfAbsent("LiveEndTime", k -> new JSONObject());
-        timeCache.put(String.valueOf(uid), endTime);
+        writeCache(() -> {
+            JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
+            JSONObject timeCache = (JSONObject) platformCache.computeIfAbsent("LiveEndTime", k -> new JSONObject());
+            timeCache.put(String.valueOf(uid), endTime);
+        });
     }
 
     /**
@@ -189,9 +275,9 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public Optional<Long> getLiveEndTime(@NonNull String platform, @NonNull Long uid) {
-        return Optional.ofNullable(cache.getJSONObject(platform))
+        return readCache(() -> Optional.ofNullable(cache.getJSONObject(platform))
                 .map(platformCache -> platformCache.getJSONObject("LiveEndTime"))
-                .map(timeCache -> timeCache.getLong(String.valueOf(uid)));
+                .map(timeCache -> timeCache.getLong(String.valueOf(uid))));
     }
 
     /**
@@ -202,9 +288,9 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public void deleteLiveEndTime(@NonNull String platform, @NonNull Long uid) {
-        Optional.ofNullable(cache.getJSONObject(platform))
+        writeCache(() -> Optional.ofNullable(cache.getJSONObject(platform))
                 .map(platformCache -> platformCache.getJSONObject("LiveEndTime"))
-                .ifPresent(endTimeCache -> endTimeCache.remove(String.valueOf(uid)));
+                .ifPresent(endTimeCache -> endTimeCache.remove(String.valueOf(uid))));
     }
 
     // ================ 其他操作 ================
@@ -217,18 +303,20 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public void resetLiveData(@NonNull String platform, @NonNull Long uid) {
-        JSONObject platformCache = cache.getJSONObject(platform);
-        if (platformCache == null) {
-            return;
-        }
-
-        String uidString = String.valueOf(uid);
-        for (String key : EVENT_RECORD_KEYS) {
-            JSONObject recordCache = platformCache.getJSONObject(key);
-            if (recordCache != null) {
-                recordCache.remove(uidString);
+        writeCache(() -> {
+            JSONObject platformCache = cache.getJSONObject(platform);
+            if (platformCache == null) {
+                return;
             }
-        }
+
+            String uidString = String.valueOf(uid);
+            for (String key : EVENT_RECORD_KEYS) {
+                JSONObject recordCache = platformCache.getJSONObject(key);
+                if (recordCache != null) {
+                    recordCache.remove(uidString);
+                }
+            }
+        });
     }
 
     /**
@@ -240,12 +328,15 @@ public class DefaultLiveDataService implements LiveDataService {
     @Override
     public void setCustomObject(@NonNull Object value, @NonNull String... keys) {
         Objects.requireNonNull(value, "自定义对象不能为空");
+        Object detachedValue = JSON.parse(JSON.toJSONString(value));
 
-        JSONObject parent = locateParent(keys, true);
-        if (parent == null) {
-            throw new IllegalStateException("无法定位自定义键路径: " + String.join(".", keys));
-        }
-        parent.put(keys[keys.length - 1], value);
+        writeCache(() -> {
+            JSONObject parent = locateParent(keys, true);
+            if (parent == null) {
+                throw new IllegalStateException("无法定位自定义键路径: " + String.join(".", keys));
+            }
+            parent.put(keys[keys.length - 1], detachedValue);
+        });
     }
 
     /**
@@ -259,18 +350,16 @@ public class DefaultLiveDataService implements LiveDataService {
     public <T> Optional<T> getCustomObject(Class<T> type, @NonNull String... keys) {
         Objects.requireNonNull(type, "目标类型不能为空");
 
-        JSONObject parent = locateParent(keys, false);
-        if (parent == null) {
-            return Optional.empty();
-        }
+        Optional<String> valueJson = readCache(() -> {
+            JSONObject parent = locateParent(keys, false);
+            if (parent == null) {
+                return Optional.empty();
+            }
 
-        Object raw = parent.get(keys[keys.length - 1]);
-        if (raw == null) {
-            return Optional.empty();
-        }
-
-        T value = JSON.to(type, raw);
-        return Optional.ofNullable(value);
+            Object raw = parent.get(keys[keys.length - 1]);
+            return raw == null ? Optional.empty() : Optional.of(JSON.toJSONString(raw));
+        });
+        return valueJson.map(json -> JSON.parseObject(json, type));
     }
 
     /**
@@ -281,18 +370,20 @@ public class DefaultLiveDataService implements LiveDataService {
      */
     @Override
     public boolean deleteCustomObject(@NonNull String... keys) {
-        JSONObject parent = locateParent(keys, false);
-        if (parent == null) {
-            return false;
-        }
+        return writeCache(() -> {
+            JSONObject parent = locateParent(keys, false);
+            if (parent == null) {
+                return false;
+            }
 
-        String key = keys[keys.length - 1];
-        if (!parent.containsKey(key)) {
-            return false;
-        }
+            String key = keys[keys.length - 1];
+            if (!parent.containsKey(key)) {
+                return false;
+            }
 
-        parent.remove(key);
-        return true;
+            parent.remove(key);
+            return true;
+        });
     }
 
     /**
@@ -337,17 +428,19 @@ public class DefaultLiveDataService implements LiveDataService {
         String sourceUid = String.valueOf(event.getSource().getUid());
         String senderUid = String.valueOf(event.getSender().getUid());
 
-        JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
-        JSONObject dataCache = (JSONObject) platformCache.computeIfAbsent(dataKey, k -> new JSONObject());
-        JSONObject sourceCache = (JSONObject) dataCache.computeIfAbsent(sourceUid, k -> new JSONObject());
-        JSONArray senderCache = (JSONArray) sourceCache.computeIfAbsent(senderUid, k -> new JSONArray());
-
         JSONObject eventJson = JSONObject.from(event);
         eventJson.remove("platform");
         eventJson.remove("source");
         eventJson.remove("sender");
         eventJson.remove("stopped");
-        senderCache.add(eventJson);
+
+        writeCache(() -> {
+            JSONObject platformCache = (JSONObject) cache.computeIfAbsent(platform, k -> new JSONObject());
+            JSONObject dataCache = (JSONObject) platformCache.computeIfAbsent(dataKey, k -> new JSONObject());
+            JSONObject sourceCache = (JSONObject) dataCache.computeIfAbsent(sourceUid, k -> new JSONObject());
+            JSONArray senderCache = (JSONArray) sourceCache.computeIfAbsent(senderUid, k -> new JSONArray());
+            senderCache.add(eventJson);
+        });
     }
 
     /**
@@ -362,29 +455,33 @@ public class DefaultLiveDataService implements LiveDataService {
     private <T> List<T> getEvents(@NonNull String platform, @NonNull Long uid, @NonNull String dataKey, @NonNull Class<T> type) {
         Objects.requireNonNull(type, "目标类型不能为空");
 
-        List<JSONObject> merged = new ArrayList<>();
-        Optional.ofNullable(cache.getJSONObject(platform))
-                .map(platformCache -> platformCache.getJSONObject(dataKey))
-                .map(dataCache -> dataCache.getJSONObject(String.valueOf(uid)))
-                .ifPresent(sourceCache -> {
-                    for (Map.Entry<String, Object> entry : sourceCache.entrySet()) {
-                        String sender = entry.getKey();
-                        Object value = entry.getValue();
-                        if (value instanceof JSONArray array) {
-                            for (int i = 0; i < array.size(); i++) {
-                                merged.add(array.getJSONObject(i).fluentPut("sender", sender));
+        return readCache(() -> {
+            List<JSONObject> merged = new ArrayList<>();
+            Optional.ofNullable(cache.getJSONObject(platform))
+                    .map(platformCache -> platformCache.getJSONObject(dataKey))
+                    .map(dataCache -> dataCache.getJSONObject(String.valueOf(uid)))
+                    .ifPresent(sourceCache -> {
+                        for (Map.Entry<String, Object> entry : sourceCache.entrySet()) {
+                            String sender = entry.getKey();
+                            Object value = entry.getValue();
+                            if (value instanceof JSONArray array) {
+                                for (int i = 0; i < array.size(); i++) {
+                                    JSONObject eventJson = JSONObject.parseObject(array.getJSONObject(i).toJSONString());
+                                    eventJson.put("sender", sender);
+                                    merged.add(eventJson);
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
-        merged.sort(Comparator.comparingLong(json -> json.getLongValue("timestamp")));
+            merged.sort(Comparator.comparingLong(json -> json.getLongValue("timestamp")));
 
-        List<T> result = new ArrayList<>();
-        for (JSONObject json : merged) {
-            result.add(JSON.to(type, json));
-        }
-        return result;
+            List<T> result = new ArrayList<>();
+            for (JSONObject json : merged) {
+                result.add(JSON.to(type, json));
+            }
+            return result;
+        });
     }
 
     /**
@@ -400,17 +497,19 @@ public class DefaultLiveDataService implements LiveDataService {
     private <T> List<T> getUserEvents(@NonNull String platform, @NonNull Long uid, @NonNull Long senderUid, @NonNull String dataKey, @NonNull Class<T> type) {
         Objects.requireNonNull(type, "目标类型不能为空");
 
-        List<T> result = new ArrayList<>();
-        Optional.ofNullable(cache.getJSONObject(platform))
-                .map(platformCache -> platformCache.getJSONObject(dataKey))
-                .map(dataCache -> dataCache.getJSONObject(String.valueOf(uid)))
-                .map(sourceCache -> sourceCache.getJSONArray(String.valueOf(senderUid)))
-                .ifPresent(array -> {
-                    for (int i = 0; i < array.size(); i++) {
-                        result.add(array.getObject(i, type));
-                    }
-                });
-        return result;
+        return readCache(() -> {
+            List<T> result = new ArrayList<>();
+            Optional.ofNullable(cache.getJSONObject(platform))
+                    .map(platformCache -> platformCache.getJSONObject(dataKey))
+                    .map(dataCache -> dataCache.getJSONObject(String.valueOf(uid)))
+                    .map(sourceCache -> sourceCache.getJSONArray(String.valueOf(senderUid)))
+                    .ifPresent(array -> {
+                        for (int i = 0; i < array.size(); i++) {
+                            result.add(JSON.parseObject(array.getJSONObject(i).toJSONString(), type));
+                        }
+                    });
+            return result;
+        });
     }
 
     /**
