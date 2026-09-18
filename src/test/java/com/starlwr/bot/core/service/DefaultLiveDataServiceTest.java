@@ -1,6 +1,7 @@
 package com.starlwr.bot.core.service;
 
 import com.alibaba.fastjson2.JSONObject;
+import com.starlwr.bot.core.config.StarBotCoreProperties;
 import com.starlwr.bot.core.event.live.base.StarBotLiveInteractionEvent;
 import com.starlwr.bot.core.event.live.base.StarBotLiveOperationEvent;
 import com.starlwr.bot.core.event.live.base.StarBotLiveUserEvent;
@@ -11,6 +12,9 @@ import com.starlwr.bot.core.model.UserInfo;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -79,5 +83,31 @@ class DefaultLiveDataServiceTest {
         assertThat(event).isInstanceOf(StarBotLiveOperationEvent.class)
                 .isInstanceOf(StarBotLiveUserEvent.class)
                 .isNotInstanceOf(StarBotLiveInteractionEvent.class);
+    }
+
+    @Test
+    void loadsHistoricalCompactSenderRecordsAsTypedEvents() throws Exception {
+        Path dataPath = Files.createTempFile("starbot-live-data", ".json");
+        Files.writeString(dataPath, """
+                {"bilibili":{"Danmu":{"123":{"789":[
+                  {"content":"legacy","timestamp":1700000000000}
+                ]}}}}
+                """, StandardCharsets.UTF_8);
+        StarBotCoreProperties properties = new StarBotCoreProperties();
+        properties.getLive().setSaveLiveData(true);
+        properties.getLive().setLiveDataPath(dataPath.toString());
+        DefaultLiveDataService service = new DefaultLiveDataService(properties);
+
+        try {
+            service.onApplicationReadyEvent();
+            DanmuEvent event = service.getDanmu("bilibili", 123L, DanmuEvent.class).get(0);
+            assertThat(event.getContent()).isEqualTo("legacy");
+            assertThat(event.getSender().getUid()).isEqualTo(789L);
+            assertThat(service.getUserDanmu("bilibili", 123L, 789L, JSONObject.class).get(0)
+                    .getJSONObject("sender").getLongValue("uid")).isEqualTo(789L);
+        } finally {
+            service.onContextClosedEvent();
+            Files.deleteIfExists(dataPath);
+        }
     }
 }
