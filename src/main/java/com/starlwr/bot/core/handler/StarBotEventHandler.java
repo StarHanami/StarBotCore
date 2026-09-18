@@ -3,10 +3,10 @@ package com.starlwr.bot.core.handler;
 import com.alibaba.fastjson2.JSONObject;
 import com.starlwr.bot.core.event.StarBotExternalBaseEvent;
 import com.starlwr.bot.core.model.PushMessage;
-import org.springframework.stereotype.Component;
+import com.starlwr.bot.core.plugin.StarBotComponent;
 
 /**
- * StarBot 事件处理器接口，推送配置中配置的事件处理器实现均应实现此接口，并使用 {@link Component} 等注解注册至 Spring 容器中
+ * StarBot 事件处理器接口，推送配置中配置的事件处理器实现均应实现此接口，并使用 {@link StarBotComponent} 注册至 Spring 容器中
  */
 public interface StarBotEventHandler {
     /**
