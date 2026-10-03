@@ -5,6 +5,8 @@ import lombok.NonNull;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
+import com.alibaba.fastjson2.JSONObject;
 
 /**
  * 直播数据服务接口
@@ -71,6 +73,38 @@ public interface LiveDataService {
      * @param uid UID
      */
     void resetLiveData(@NonNull String platform, @NonNull Long uid);
+
+    /**
+     * Freeze the latest event session. Superseded sessions may be released once readers finish.
+     */
+    default void deactivate(@NonNull String platform, @NonNull Long uid, String reason) {
+    }
+
+    /** Retained event storage allocations, including readers of a superseded session. */
+    default LiveEventStorageUsage getEventStorageUsage() {
+        return LiveEventStorageUsage.empty();
+    }
+
+    /** Pin a stable report view across resets. Legacy implementations may return empty. */
+    default Optional<LiveDataReadSession> openReadSession(@NonNull String platform, @NonNull Long uid) {
+        return Optional.empty();
+    }
+
+    /**
+     * Iterate over the latest event session without materialising a List of all events.
+     */
+    default void forEachEvent(@NonNull String platform, @NonNull Long uid,
+                              @NonNull String dataKey, @NonNull Consumer<JSONObject> consumer) {
+        for (JSONObject event : getEvents(platform, uid, dataKey)) {
+            consumer.accept(event);
+        }
+    }
+
+    /** Compatibility view used by the default implementation and legacy callers. */
+    default List<JSONObject> getEvents(@NonNull String platform, @NonNull Long uid,
+                                       @NonNull String dataKey) {
+        return List.of();
+    }
 
     /**
      * 设置自定义对象

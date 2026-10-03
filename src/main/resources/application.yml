@@ -15,3 +15,10 @@ starbot:
     log:
       console: INFO
       file: INFO
+    live:
+      memory-backend: auto
+      # Diagnostic warning threshold; current-session data is retained.
+      memory-budget-bytes: 1073741824
+      cold-compression: auto
+      cold-compression-threshold-bytes: 1048576
+      cold-compression-level: 3

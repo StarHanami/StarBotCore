@@ -18,6 +18,9 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
+
 class DefaultLiveDataServiceTest {
     @Test
     void migratesLegacyFlatLiveKeysIntoNestedPlatformLayout() {
@@ -59,7 +62,9 @@ class DefaultLiveDataServiceTest {
 
     @Test
     void persistsAndResetsUserEventsUsingTheNewNestedApi() {
-        DefaultLiveDataService service = new DefaultLiveDataService(new com.starlwr.bot.core.config.StarBotCoreProperties());
+        StarBotCoreProperties properties = new StarBotCoreProperties();
+        properties.getLive().setSaveLiveData(false);
+        DefaultLiveDataService service = new DefaultLiveDataService(properties);
         LiveStreamerInfo streamer = new LiveStreamerInfo(123L, "streamer", 456L);
         DanmuEvent event = new DanmuEvent("bilibili", streamer, new UserInfo(789L, "viewer"),
                 "hello", Instant.ofEpochMilli(1700000000000L));
@@ -73,6 +78,7 @@ class DefaultLiveDataServiceTest {
         service.resetLiveData("bilibili", 123L);
 
         assertThat(service.getDanmu("bilibili", 123L, DanmuEvent.class)).isEmpty();
+        service.onContextClosedEvent();
     }
 
     @Test
@@ -109,5 +115,32 @@ class DefaultLiveDataServiceTest {
             service.onContextClosedEvent();
             Files.deleteIfExists(dataPath);
         }
+    }
+
+    @Test
+    void streamsEventsWithoutChangingPayloadAndSeparatesResetSessions() {
+        StarBotCoreProperties properties = new StarBotCoreProperties();
+        properties.getLive().setSaveLiveData(false);
+        DefaultLiveDataService service = new DefaultLiveDataService(properties);
+        LiveStreamerInfo streamer = new LiveStreamerInfo(123L, "streamer", 456L);
+        DanmuEvent first = new DanmuEvent("bilibili", streamer, new UserInfo(789L, "viewer"),
+                "emoji 😀", Instant.ofEpochMilli(1700000000000L));
+        service.addDanmu(first);
+
+        List<JSONObject> streamed = new ArrayList<>();
+        service.forEachEvent("bilibili", 123L, "Danmu", streamed::add);
+        assertThat(streamed).singleElement().satisfies(json -> {
+            assertThat(json.getString("content")).isEqualTo("emoji 😀");
+            assertThat(json.getJSONObject("sender").getLongValue("uid")).isEqualTo(789L);
+        });
+
+        service.resetLiveData("bilibili", 123L);
+        assertThat(service.getDanmu("bilibili", 123L, DanmuEvent.class)).isEmpty();
+        service.addDanmu(new DanmuEvent("bilibili", streamer, new UserInfo(789L, "viewer"),
+                "second", Instant.ofEpochMilli(1700000001000L)));
+        service.deactivate("bilibili", 123L, "test");
+        assertThat(service.getDanmu("bilibili", 123L, DanmuEvent.class)).singleElement()
+                .extracting(DanmuEvent::getContent).isEqualTo("second");
+        service.onContextClosedEvent();
     }
 }

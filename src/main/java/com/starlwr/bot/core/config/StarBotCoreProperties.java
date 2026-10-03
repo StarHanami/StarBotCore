@@ -179,6 +179,19 @@ public class StarBotCoreProperties {
          * 判定主播断线重连（下播后短时间内重新开播）的时间间隔，断线重连不会重置直播数据，单位：秒
          */
         private int reconnectInterval = 300;
+
+        /** Event payload storage backend: auto, heap, or memory-segment. */
+        private String memoryBackend = "auto";
+
+        /** Diagnostic warning threshold; active-session events are never discarded to enforce it. */
+        private long memoryBudgetBytes = 1024L * 1024L * 1024L;
+
+        /** Cold segment compression: auto, zstd, or none. */
+        private String coldCompression = "auto";
+
+        private long coldCompressionThresholdBytes = 1024L * 1024L;
+
+        private int coldCompressionLevel = 3;
     }
 
     /**
