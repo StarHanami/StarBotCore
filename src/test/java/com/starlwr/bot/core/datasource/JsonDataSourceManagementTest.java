@@ -26,6 +26,41 @@ class JsonDataSourceManagementTest {
     Path tempDir;
 
     @Test
+    void watcherWaitsForManagementTransactionAndThenSkipsItsOwnFileEvent() throws Exception {
+        Path path = tempDir.resolve("datasource.json");
+        Files.writeString(path, "[]");
+        JsonDataSource source = source(path);
+        var lockField = JsonDataSource.class.getDeclaredField("managementLock");
+        lockField.setAccessible(true);
+        Object lock = lockField.get(source);
+        var reload = JsonDataSource.class.getDeclaredMethod("reloadFromDisk");
+        reload.setAccessible(true);
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread watcher = new Thread(() -> {
+            try { reload.invoke(source); } catch (Throwable e) { failure.set(e); }
+        });
+        try {
+            synchronized (lock) {
+                watcher.start();
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+                while (watcher.isAlive() && watcher.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline)
+                    Thread.onSpinWait();
+                assertThat(watcher.getState()).isEqualTo(Thread.State.BLOCKED);
+                source.apply(JSON.parseArray("[{\"uid\":123,\"platform\":\"bilibili\",\"enabled\":false,\"targets\":[]}]"), source.snapshot().revision());
+            }
+            watcher.join(2_000);
+            assertThat(watcher.isAlive()).isFalse();
+            assertThat(failure.get()).isNull();
+            var revisionField = JsonDataSource.class.getDeclaredField("lastAppliedRevision");
+            revisionField.setAccessible(true);
+            assertThat(revisionField.get(source)).isEqualTo(source.snapshot().revision());
+            assertThat(source.snapshot().document().getJSONObject(0).getLongValue("uid")).isEqualTo(123L);
+        } finally {
+            source.close();
+        }
+    }
+
+    @Test
     void appliesAtomicallyAndKeepsDisabledEntriesInDocument() throws Exception {
         Path path = tempDir.resolve("datasource.json");
         Files.writeString(path, "[]");

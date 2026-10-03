@@ -58,6 +58,7 @@ public class JsonDataSource extends AbstractDataSource implements JsonDataSource
 
     private final long debounceDelayMillis = 1000L;
 
+    // Initial load, watcher reload and management transactions share this lock.
     private final Object managementLock = new Object();
 
     private volatile String lastAppliedRevision;
@@ -77,27 +78,29 @@ public class JsonDataSource extends AbstractDataSource implements JsonDataSource
      */
     @Override
     public void load() {
-        log.info("已选用 JSON 作为数据源");
-        log.info("开始从 JSON 中初始化推送配置");
+        synchronized (managementLock) {
+            log.info("已选用 JSON 作为数据源");
+            log.info("开始从 JSON 中初始化推送配置");
 
-        String path = properties.getDatasource().getJsonPath();
-        try {
-            String content = Files.readString(Path.of(path));
-            List<PushUser> users = parse(content);
-            add(users);
-            lastAppliedRevision = revision(content);
-        } catch (NoSuchFileException e) {
-            throw new DataSourceException("数据源 JSON 文件不存在, 请检查配置的路径是否正确: " + path);
-        } catch (Exception e) {
-            throw new DataSourceException("读取数据源 JSON 文件异常", e);
-        }
+            String path = properties.getDatasource().getJsonPath();
+            try {
+                String content = Files.readString(Path.of(path));
+                List<PushUser> users = parse(content);
+                add(users);
+                lastAppliedRevision = revision(content);
+            } catch (NoSuchFileException e) {
+                throw new DataSourceException("数据源 JSON 文件不存在, 请检查配置的路径是否正确: " + path);
+            } catch (Exception e) {
+                throw new DataSourceException("读取数据源 JSON 文件异常", e);
+            }
 
-        log.info("成功从 JSON 中导入了 {} 个主播", this.users.size());
+            log.info("成功从 JSON 中导入了 {} 个主播", this.users.size());
 
-        eventPublisher.publishEvent(new StarBotDataSourceLoadCompleteEvent(new ArrayList<>(this.users)));
+            eventPublisher.publishEvent(new StarBotDataSourceLoadCompleteEvent(new ArrayList<>(this.users)));
 
-        if (properties.getDatasource().isJsonAutoReload()) {
-            watchFileUpdate();
+            if (properties.getDatasource().isJsonAutoReload()) {
+                watchFileUpdate();
+            }
         }
     }
 
@@ -171,34 +174,36 @@ public class JsonDataSource extends AbstractDataSource implements JsonDataSource
      * 重载数据源
      */
     private void reloadFromDisk() {
-        String path = properties.getDatasource().getJsonPath();
-        try {
-            String content = Files.readString(Path.of(path), StandardCharsets.UTF_8);
-            String currentRevision = revision(content);
-            if (Objects.equals(currentRevision, lastAppliedRevision)) {
-                log.debug("忽略由当前进程原子应用触发的数据源文件事件: revision={}", currentRevision);
-                return;
-            }
-            log.info("检测到数据源 JSON 文件已更新, 开始从 JSON 中重载推送配置");
-            List<PushUser> addUsers = new ArrayList<>();
-            List<PushUser> removeUsers = new ArrayList<>();
-            List<PushUser> updateUsers = new ArrayList<>();
+        synchronized (managementLock) {
+            String path = properties.getDatasource().getJsonPath();
+            try {
+                String content = Files.readString(Path.of(path), StandardCharsets.UTF_8);
+                String currentRevision = revision(content);
+                if (Objects.equals(currentRevision, lastAppliedRevision)) {
+                    log.debug("忽略由当前进程原子应用触发的数据源文件事件: revision={}", currentRevision);
+                    return;
+                }
+                log.info("检测到数据源 JSON 文件已更新, 开始从 JSON 中重载推送配置");
+                List<PushUser> addUsers = new ArrayList<>();
+                List<PushUser> removeUsers = new ArrayList<>();
+                List<PushUser> updateUsers = new ArrayList<>();
 
-            List<PushUser> users = parse(content);
-            if (new HashSet<>(users).size() != users.size()) {
-                throw new DataSourceException("推送用户列表中存在重复的用户");
-            }
+                List<PushUser> users = parse(content);
+                if (new HashSet<>(users).size() != users.size()) {
+                    throw new DataSourceException("推送用户列表中存在重复的用户");
+                }
 
-            CollectionUtil.compareCollectionDiff(this.users, users, addUsers, removeUsers, updateUsers);
+                CollectionUtil.compareCollectionDiff(this.users, users, addUsers, removeUsers, updateUsers);
 
-            add(addUsers);
-            for (PushUser user : removeUsers) {
-                remove(user);
+                add(addUsers);
+                for (PushUser user : removeUsers) {
+                    remove(user);
+                }
+                update(updateUsers);
+                lastAppliedRevision = currentRevision;
+            } catch (Exception e) {
+                log.error("重载数据源 JSON 文件异常", e);
             }
-            update(updateUsers);
-            lastAppliedRevision = currentRevision;
-        } catch (Exception e) {
-            log.error("重载数据源 JSON 文件异常", e);
         }
     }
 
