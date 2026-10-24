@@ -1,8 +1,10 @@
 package com.starlwr.bot.core.config;
 
 import ch.qos.logback.classic.Level;
-import com.starlwr.bot.core.model.Sender;
-import com.starlwr.bot.core.model.TextWithStyle;
+import com.starlwr.bot.core.ai.AiModel;
+import com.starlwr.bot.core.command.CommandPermission;
+import com.starlwr.bot.core.message.Sender;
+import com.starlwr.bot.core.painter.TextWithStyle;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.Setter;
@@ -23,6 +25,12 @@ public class StarBotCoreProperties {
     private final NetworkThread networkThread = new NetworkThread();
 
     @Getter
+    private final CommandThread commandThread = new CommandThread();
+
+    @Getter
+    private final AiThread aiThread = new AiThread();
+
+    @Getter
     private final Log log = new Log();
 
     @Getter
@@ -35,6 +43,9 @@ public class StarBotCoreProperties {
     private final Plugin plugin = new Plugin();
 
     @Getter
+    private final Command command = new Command();
+
+    @Getter
     private final Live live = new Live();
 
     @Getter
@@ -42,6 +53,9 @@ public class StarBotCoreProperties {
 
     @Getter
     private final Mail mail = new Mail();
+
+    @Getter
+    private final Ai ai = new Ai();
 
     /**
      * 非插件实现的推送平台配置
@@ -69,6 +83,60 @@ public class StarBotCoreProperties {
          * 线程池任务队列容量
          */
         private int queueCapacity = 5;
+
+        /**
+         * 非核心线程存活时间，单位：秒
+         */
+        private int keepAliveSeconds = 60;
+    }
+
+    /**
+     * 命令线程相关
+     */
+    @Getter
+    @Setter
+    public static class CommandThread {
+        /**
+         * 线程池核心线程数
+         */
+        private int corePoolSize = 10;
+
+        /**
+         * 线程池最大线程数
+         */
+        private int maxPoolSize = 50;
+
+        /**
+         * 线程池任务队列容量
+         */
+        private int queueCapacity = Integer.MAX_VALUE;
+
+        /**
+         * 非核心线程存活时间，单位：秒
+         */
+        private int keepAliveSeconds = 60;
+    }
+
+    /**
+     * AI 线程相关
+     */
+    @Getter
+    @Setter
+    public static class AiThread {
+        /**
+         * 线程池核心线程数
+         */
+        private int corePoolSize = 5;
+
+        /**
+         * 线程池最大线程数
+         */
+        private int maxPoolSize = 30;
+
+        /**
+         * 线程池任务队列容量
+         */
+        private int queueCapacity = 10;
 
         /**
          * 非核心线程存活时间，单位：秒
@@ -155,6 +223,43 @@ public class StarBotCoreProperties {
     }
 
     /**
+     * 命令相关
+     */
+    @Getter
+    @Setter
+    public static class Command {
+        /**
+         * 全局命令前缀，空字符串表示无需前缀
+         */
+        private String prefix = "";
+
+        /**
+         * 群聊触发命令是否必须提及机器人，@ 机器人或回复机器人的消息均视为提及，私聊不受限制
+         */
+        private boolean mention = false;
+
+        /**
+         * 全局禁用的命令 ID 列表
+         */
+        private List<String> disabled = new ArrayList<>();
+
+        /**
+         * 命令权限覆盖配置，按命令 ID 配置，未配置时使用命令默认权限
+         */
+        private Map<String, CommandPermission> permissions = new HashMap<>();
+
+        /**
+         * 主人账号列表，按推送平台名称分别配置
+         */
+        private Map<String, List<String>> owners = new HashMap<>();
+
+        /**
+         * 命令禁用配置文件路径
+         */
+        private String disabledCommandPath = "disabled-command.json";
+    }
+
+    /**
      * 直播相关
      */
     @Getter
@@ -201,6 +306,11 @@ public class StarBotCoreProperties {
     @Setter
     public static class Paint {
         /**
+         * 是否绘制 StarBot Logo
+         */
+        private boolean drawLogo = true;
+
+        /**
          * 绘图器字体列表，支持配置为字体名称或字体文件路径
          */
         private List<String> fonts = new ArrayList<>();
@@ -228,8 +338,25 @@ public class StarBotCoreProperties {
         private String defaultTo;
     }
 
+    /**
+     * AI 相关
+     */
+    @Getter
+    @Setter
+    public static class Ai {
+        /**
+         * 默认模型名称，配置多个模型时必须指定
+         */
+        private String defaultModel;
+
+        /**
+         * AI 模型配置
+         */
+        private Map<String, AiModel> models = new LinkedHashMap<>();
+    }
+
     @PostConstruct
-    public void init() {
+    private void init() {
         String os = System.getProperty("os.name").toLowerCase();
         paint.getFonts().add("内置");
         if (os.contains("win")) {

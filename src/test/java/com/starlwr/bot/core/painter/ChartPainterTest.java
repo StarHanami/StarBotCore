@@ -1,9 +1,13 @@
 package com.starlwr.bot.core.painter;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
+import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -12,6 +16,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,7 +69,7 @@ public class ChartPainterTest {
     /**
      * 加载项目内置字体，加载失败时回退至系统字体
      * <p>
-     * 优先加载模块资源目录下的 fonts/font.ttf（与生产环境 FontUtil.parseFont("内置") 一致），
+     * 优先加载模块资源目录下的 fonts/font.ttf（与生产环境 FontService.parseFont("内置") 一致），
      * 加载失败或文件不存在时回退至系统 SANS_SERIF 字体
      *
      * @return 字体，25 号字号
@@ -133,6 +138,38 @@ public class ChartPainterTest {
         assertEquals(800, image.getWidth());
         assertEquals(800 * 500 / 900, image.getHeight());
         save(image, "line-interaction.png");
+    }
+
+    /**
+     * 长数值刻度应完整显示，覆盖直播报告字号、较长整数、负数与小数，以及分桶和原始样本两种绘制方式
+     */
+    @ParameterizedTest
+    @CsvSource({
+            "22518, 24000, 25",
+            "123456789, 140000000, 15",
+            "-22518, -24000, 25",
+            "-0.22518, -0.24, 25"
+    })
+    public void testRenderLineChartLongTickLabels(double value, String label, int fontSize) {
+        long start = 1784617225000L;
+        Font font = FONT.deriveFont(Font.PLAIN, (float) fontSize);
+        List<ChartPainter.LinePoint> samples = List.of(
+                new ChartPainter.LinePoint(start, 0),
+                new ChartPainter.LinePoint(start + 60_000L, value)
+        );
+
+        for (boolean cumulative : new boolean[]{true, false}) {
+            for (int bucketCount : new int[]{20, 0}) {
+                BufferedImage image = ChartPainter.renderLineChart(samples, cumulative, bucketCount, WIDTH, font).orElseThrow();
+                assertEquals(WIDTH, image.getWidth());
+                assertEquals(WIDTH * 500 / 900, image.getHeight());
+
+                // 从绘图结果定位纵轴，逐像素核对完整刻度文字，避免仅校验图片尺寸而漏掉裁切
+                int axisX = findDarkAxisColumn(image);
+                int baselineY = (value > 0 ? 22 : image.getHeight() - 58) + 5;
+                assertTickLabelFullyVisible(image, font, label, axisX, baselineY);
+            }
+        }
     }
 
     /**
@@ -513,6 +550,95 @@ public class ChartPainterTest {
         assertTrue(ChartPainter.renderRankingChart(items, 0, RANKING_FONT).isEmpty());
         assertTrue(ChartPainter.renderLineChart(zeroSamples, false, 20, 0, LINE_FONT).isEmpty());
         assertTrue(ChartPainter.renderDistributionChart(zeroSlices, -1, DISTRIBUTION_FONT).isEmpty());
+    }
+
+    /**
+     * 测试互动曲线分桶内的金额相互抵消后为零，不残留浮点误差
+     */
+    @Test
+    public void testInteractionBucketCancelsToZero() {
+        List<ChartPainter.LinePoint> samples = List.of(new ChartPainter.LinePoint(1, 0.1),
+                new ChartPainter.LinePoint(2, 0.2), new ChartPainter.LinePoint(3, -0.3));
+
+        double[] values = ReflectionTestUtils.invokeMethod(ChartPainter.class, "divide", samples, 0L, 100L, false, 2);
+
+        assertArrayEquals(new double[]{0, 0, 0}, values);
+    }
+
+    /**
+     * 测试累计曲线跨桶累加金额时保持精确总值
+     */
+    @Test
+    public void testCumulativeBucketsPreserveExactTotal() {
+        List<ChartPainter.LinePoint> samples = List.of(new ChartPainter.LinePoint(1, 0.1),
+                new ChartPainter.LinePoint(40, 0.2), new ChartPainter.LinePoint(80, -0.3));
+
+        double[] values = ReflectionTestUtils.invokeMethod(ChartPainter.class, "divide", samples, 0L, 100L, true, 3);
+
+        assertArrayEquals(new double[]{0, 0.1, 0.3, 0}, values);
+    }
+
+    /**
+     * 测试不分桶的累计曲线按时间排序后精确累加金额
+     */
+    @Test
+    public void testRawCumulativePointsPreserveExactTotal() {
+        List<ChartPainter.LinePoint> samples = List.of(new ChartPainter.LinePoint(80, -0.3),
+                new ChartPainter.LinePoint(1, 0.1), new ChartPainter.LinePoint(40, 0.2));
+
+        List<Point2D.Double> points = ReflectionTestUtils.invokeMethod(ChartPainter.class, "buildRawPoints", samples, 0L, 100L, true);
+
+        assertEquals(List.of(0.0, 0.1, 0.3, 0.0), points.stream().map(Point2D.Double::getY).toList());
+    }
+
+    /**
+     * 将刻度与独立渲染的完整文字比较，验证左边界留白及每个文字像素
+     */
+    private static void assertTickLabelFullyVisible(BufferedImage image, Font font, String label, int axisX, int baselineY) {
+        BufferedImage expected = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D draw = expected.createGraphics();
+        draw.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        draw.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        draw.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        draw.setFont(font);
+        FontMetrics metrics = draw.getFontMetrics();
+        int labelWidth = metrics.stringWidth(label);
+        int labelX = axisX - 8 - labelWidth;
+        int labelY = baselineY - metrics.getAscent();
+        draw.setColor(Color.WHITE);
+        draw.fillRect(0, 0, expected.getWidth(), expected.getHeight());
+        draw.setColor(Color.DARK_GRAY);
+        draw.drawString(label, 0, metrics.getAscent());
+        draw.dispose();
+
+        assertTrue(labelX > 0, "刻度 " + label + " 应完整显示并留有左侧空白，实际文字起点: " + labelX);
+        for (int y = 0; y < metrics.getHeight(); y++) {
+            for (int x = 0; x < labelWidth; x++) {
+                assertEquals(expected.getRGB(x, y), image.getRGB(labelX + x, labelY + y),
+                        "刻度 " + label + " 的文字像素不完整，位置: " + x + ", " + y);
+            }
+        }
+    }
+
+    /**
+     * 查找深灰色纵轴所在列，避免测试依赖固定的左侧留白
+     */
+    private static int findDarkAxisColumn(BufferedImage image) {
+        int bestX = -1;
+        int bestCount = 0;
+        for (int x = 0; x < image.getWidth(); x++) {
+            int count = 0;
+            for (int y = 30; y < image.getHeight() - 58; y++) {
+                if (image.getRGB(x, y) == Color.DARK_GRAY.getRGB()) {
+                    count++;
+                }
+            }
+            if (count > bestCount) {
+                bestCount = count;
+                bestX = x;
+            }
+        }
+        return bestX;
     }
 
     /**

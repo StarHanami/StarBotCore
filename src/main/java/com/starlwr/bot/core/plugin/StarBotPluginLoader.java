@@ -7,6 +7,7 @@ import com.starlwr.bot.core.plugin.web.PluginWebPermissions;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
 import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.annotation.AnnotatedGenericBeanDefinition;
 import org.springframework.beans.factory.config.BeanDefinition;
@@ -15,14 +16,14 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.BeanDefinitionReaderUtils;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
+import org.springframework.context.annotation.*;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.context.ResourceLoaderAware;
-import org.springframework.context.annotation.*;
-import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.core.Ordered;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.core.type.MethodMetadata;
 import org.springframework.core.type.StandardMethodMetadata;
@@ -166,7 +167,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
         sortPlugins();
         validateWebManifests();
 
-        if (needDownloadDependencies.values().stream().allMatch(List::isEmpty)) {
+        if (needDownloadDependencies.values().stream().allMatch(CollectionUtils::isEmpty)) {
             log.info("开始加载 StarBot 插件");
 
             for (String beanDefinitionName : registry.getBeanDefinitionNames()) {
@@ -187,7 +188,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
                     }
                 }
 
-                if (!plugin.getComponentClasses().isEmpty()) {
+                if (CollectionUtils.isNotEmpty(plugin.getComponentClasses())) {
                     for (Class<?> clazz : plugin.getComponentClasses()) {
                         AnnotatedGenericBeanDefinition beanDefinition = new AnnotatedGenericBeanDefinition(clazz);
                         String beanDefinitionName = new AnnotationBeanNameGenerator().generateBeanName(beanDefinition, registry);
@@ -262,8 +263,8 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
         AnnotationConfigUtils.registerAnnotationConfigProcessors(registry);
         new ConfigurationClassPostProcessor().postProcessBeanDefinitionRegistry(registry);
 
-        plugins.removeIf(plugin -> plugin.getComponentClasses().isEmpty());
-        if (plugins.isEmpty()) {
+        plugins.removeIf(plugin -> CollectionUtils.isEmpty(plugin.getComponentClasses()));
+        if (CollectionUtils.isEmpty(plugins)) {
             log.info("没有需要加载的 StarBot 插件");
         } else {
             log.info("成功加载了 {} 个 StarBot 插件", plugins.size());
@@ -319,6 +320,14 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
     }
 
     /**
+     * 获取已加载的插件列表
+     * @return 已加载的插件列表
+     */
+    public List<StarBotPlugin> getPlugins() {
+        return List.copyOf(plugins);
+    }
+
+    /**
      * 扫描目录中的依赖列表
      * @param path 目录
      * @return 依赖列表
@@ -358,7 +367,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
         plugins.clear();
         plugins.addAll(latestMap.values());
 
-        if (plugins.isEmpty()) {
+        if (CollectionUtils.isEmpty(plugins)) {
             return;
         }
 
@@ -383,7 +392,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
             }
         } while (changed);
 
-        if (plugins.isEmpty()) {
+        if (CollectionUtils.isEmpty(plugins)) {
             return;
         }
 
@@ -416,7 +425,7 @@ public class StarBotPluginLoader implements EnvironmentAware, ResourceLoaderAwar
 
         List<String> sortedIds = new ArrayList<>();
 
-        while (!queue.isEmpty()) {
+        while (CollectionUtils.isNotEmpty(queue)) {
             String id = queue.poll();
             sortedIds.add(id);
 

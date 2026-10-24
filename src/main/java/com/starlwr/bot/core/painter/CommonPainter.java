@@ -1,23 +1,25 @@
 package com.starlwr.bot.core.painter;
 
 import com.starlwr.bot.core.config.StarBotCoreProperties;
-import com.starlwr.bot.core.model.TextWithStyle;
-import com.starlwr.bot.core.util.FontUtil;
-import com.starlwr.bot.core.util.StringUtil;
 import jakarta.annotation.Nullable;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.springframework.boot.info.BuildProperties;
-import org.springframework.data.util.Pair;
-import org.springframework.util.CollectionUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
+import java.awt.geom.Arc2D;
+import java.awt.geom.Area;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
@@ -33,7 +35,7 @@ public class CommonPainter {
 
     private final StarBotCoreProperties properties;
 
-    private final FontUtil fontUtil;
+    private final FontService fontService;
 
     @Getter
     private Integer rowSpace = 10;
@@ -68,10 +70,10 @@ public class CommonPainter {
      * @param height 画布高度
      * @param autoExpand 是否自动扩展画布高度
      */
-    public CommonPainter(BuildProperties buildProperties, StarBotCoreProperties properties, FontUtil fontUtil, int width, int height, boolean autoExpand) {
+    public CommonPainter(BuildProperties buildProperties, StarBotCoreProperties properties, FontService fontService, int width, int height, boolean autoExpand) {
         this.buildProperties = buildProperties;
         this.properties = properties;
-        this.fontUtil = fontUtil;
+        this.fontService = fontService;
 
         this.width = width;
         this.height = height;
@@ -240,6 +242,72 @@ public class CommonPainter {
     }
 
     /**
+     * 绘制圆环扇区，角度从正右方起算，正值逆时针，此方法不会移动绘图坐标
+     * @param x 外圆左上角的 X 坐标
+     * @param y 外圆左上角的 Y 坐标
+     * @param diameter 外圆直径
+     * @param thickness 圆环厚度
+     * @param startAngle 起始角度
+     * @param extent 扇区角度
+     * @param color 颜色
+     * @return 当前绘图器实例
+     */
+    public CommonPainter drawRingSegment(int x, int y, int diameter, int thickness, double startAngle, double extent, @NonNull Color color) {
+        if (diameter <= 0 || thickness <= 0 || thickness * 2 >= diameter || !Double.isFinite(startAngle) || !Double.isFinite(extent)) {
+            throw new IllegalArgumentException("圆环尺寸或角度无效");
+        }
+        expandHeightIfNeeded(y + diameter);
+        Area segment = new Area(new Arc2D.Double(x, y, diameter, diameter, startAngle, extent, Arc2D.PIE));
+        segment.subtract(new Area(new Ellipse2D.Double(x + thickness, y + thickness, diameter - thickness * 2, diameter - thickness * 2)));
+        Color originalColor = this.draw.getColor();
+        try {
+            this.draw.setColor(color);
+            this.draw.fill(segment);
+        } finally {
+            this.draw.setColor(originalColor);
+        }
+        return this;
+    }
+
+    /**
+     * 绘制圆角五角星，此方法不会移动绘图坐标
+     * @param x 中心 X 坐标
+     * @param y 中心 Y 坐标
+     * @param radius 外半径
+     * @param color 颜色
+     * @return 当前绘图器实例
+     */
+    public CommonPainter drawStar(int x, int y, int radius, @NonNull Color color) {
+        // 交替使用外半径和内半径，计算五角星的十个顶点
+        List<Point> vertices = new ArrayList<>();
+        for (int index = 0; index < 10; index++) {
+            double angle = -Math.PI / 2 + index * Math.PI / 5;
+            double length = index % 2 == 0 ? radius : radius * 0.5;
+            vertices.add(new Point(x + (int) Math.round(Math.cos(angle) * length), y + (int) Math.round(Math.sin(angle) * length)));
+        }
+
+        // 在每个顶点两侧采样二次贝塞尔曲线，使星角平滑圆润
+        List<Point> points = new ArrayList<>();
+        for (int index = 0; index < vertices.size(); index++) {
+            Point previous = vertices.get((index + vertices.size() - 1) % vertices.size());
+            Point current = vertices.get(index);
+            Point next = vertices.get((index + 1) % vertices.size());
+            double startX = current.x + (previous.x - current.x) * 0.25;
+            double startY = current.y + (previous.y - current.y) * 0.25;
+            double endX = current.x + (next.x - current.x) * 0.25;
+            double endY = current.y + (next.y - current.y) * 0.25;
+            for (int step = 0; step <= 8; step++) {
+                double t = step / 8.0;
+                double inverse = 1 - t;
+                points.add(new Point((int) Math.round(inverse * inverse * startX + 2 * inverse * t * current.x + t * t * endX),
+                        (int) Math.round(inverse * inverse * startY + 2 * inverse * t * current.y + t * t * endY)));
+            }
+        }
+
+        return drawPolygon(points, color);
+    }
+
+    /**
      * 绘制一个多边形，此方法不会移动绘图坐标
      *
      * @param points   多边形的顶点坐标列表
@@ -247,7 +315,7 @@ public class CommonPainter {
      * @return 当前绘图器实例
      */
     public CommonPainter drawPolygon(@NonNull List<Point> points, @NonNull Color color) {
-        if (points.isEmpty()) {
+        if (CollectionUtils.isEmpty(points)) {
             return this;
         }
 
@@ -628,7 +696,7 @@ public class CommonPainter {
      * @return 当前绘图器实例
      */
     public CommonPainter drawTextWithStyle(@NonNull List<TextWithStyle> texts, Point drawLocation, boolean autoWrap, int marginRight) {
-        if (texts.isEmpty()) {
+        if (CollectionUtils.isEmpty(texts)) {
             return this;
         }
 
@@ -641,7 +709,7 @@ public class CommonPainter {
         int maxHeight = 0;
 
         for (TextWithStyle text : texts) {
-            if (StringUtil.isEmpty(text.getText())) {
+            if (StringUtils.isEmpty(text.getText())) {
                 continue;
             }
 
@@ -657,7 +725,7 @@ public class CommonPainter {
 
                     i += Character.charCount(codePoint);
 
-                    Font font = text.getFont() != null ? text.getFont() : fontUtil.findFontForCharacter(codePoint).deriveFont(text.getStyle(), text.getSize());
+                    Font font = text.getFont() != null ? text.getFont() : fontService.findFontForCharacter(codePoint).deriveFont(text.getStyle(), text.getSize());
                     this.draw.setFont(font);
 
                     FontMetrics metrics = this.draw.getFontMetrics();
@@ -772,17 +840,17 @@ public class CommonPainter {
      * @return 当前绘图器实例
      */
     public CommonPainter drawTextRightWithStyle(@NonNull List<TextWithStyle> texts, Point drawLocation, int marginRight, Point noCoverLimit) {
-        if (texts.isEmpty()) {
+        if (CollectionUtils.isEmpty(texts)) {
             return this;
         }
 
-        List<Pair<Integer, Integer>> sizes = texts.stream().map(text -> fontUtil.getStringWidthAndHeight(this.draw, text)).toList();
+        List<Pair<Integer, Integer>> sizes = texts.stream().map(text -> fontService.getStringWidthAndHeight(this.draw, text)).toList();
 
         for (int i = 0; i < sizes.size(); i++) {
             Pair<Integer, Integer> size = sizes.get(i);
 
             Point currentPoint = drawLocation != null ? drawLocation : new Point(this.xy.x, this.xy.y);
-            currentPoint.x = this.width - size.getFirst() - marginRight;
+            currentPoint.x = this.width - size.getLeft() - marginRight;
             if (noCoverLimit != null) {
                 currentPoint.y = Math.max(currentPoint.y, noCoverLimit.y);
             }
@@ -790,7 +858,7 @@ public class CommonPainter {
             drawTextWithStyle(List.of(texts.get(i)), currentPoint);
 
             if (drawLocation == null) {
-                setPos(this.xy.x, currentPoint.y + size.getSecond() + this.rowSpace);
+                setPos(this.xy.x, currentPoint.y + size.getRight() + this.rowSpace);
             }
         }
 
@@ -828,7 +896,7 @@ public class CommonPainter {
             drawTextRightWithStyle(line, marginRight);
         }
 
-        if (!CollectionUtils.isEmpty(properties.getPaint().getExtraCopyrights())) {
+        if (CollectionUtils.isNotEmpty(properties.getPaint().getExtraCopyrights())) {
             drawTextRightWithStyle(properties.getPaint().getExtraCopyrights(), marginRight);
         }
 
@@ -842,7 +910,7 @@ public class CommonPainter {
      * @return 宽度，高度
      */
     public Pair<Integer, Integer> getStringWidthAndHeight(String text) {
-        return fontUtil.getStringWidthAndHeight(this.draw, new TextWithStyle(text, TEXT_FONT_SIZE));
+        return fontService.getStringWidthAndHeight(this.draw, new TextWithStyle(text, TEXT_FONT_SIZE));
     }
 
     /**
@@ -853,7 +921,16 @@ public class CommonPainter {
      * @return 宽度，高度
      */
     public Pair<Integer, Integer> getStringWidthAndHeight(String text, int size) {
-        return fontUtil.getStringWidthAndHeight(this.draw, new TextWithStyle(text, size));
+        return fontService.getStringWidthAndHeight(this.draw, new TextWithStyle(text, size));
+    }
+
+    /**
+     * 计算含格式文本的像素宽度和高度
+     * @param text 含格式文本
+     * @return 宽度，高度
+     */
+    public Pair<Integer, Integer> getStringWidthAndHeight(TextWithStyle text) {
+        return fontService.getStringWidthAndHeight(this.draw, text);
     }
 
     /**
@@ -908,7 +985,7 @@ public class CommonPainter {
         if (font != null) {
             this.draw.setFont(font);
         } else {
-            this.draw.setFont(fontUtil.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
+            this.draw.setFont(fontService.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
         }
         FontMetrics metrics = this.draw.getFontMetrics();
         int charWidth = metrics.stringWidth(charStr);
@@ -972,7 +1049,7 @@ public class CommonPainter {
             if (font != null) {
                 this.draw.setFont(font);
             } else {
-                this.draw.setFont(fontUtil.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
+                this.draw.setFont(fontService.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
             }
             FontMetrics metrics = this.draw.getFontMetrics();
             sum = sum + metrics.stringWidth(charStr);
@@ -1075,7 +1152,7 @@ public class CommonPainter {
         if (font != null) {
             this.draw.setFont(font);
         } else {
-            this.draw.setFont(fontUtil.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
+            this.draw.setFont(fontService.findFontForCharacter(codePoint).deriveFont(Font.PLAIN, Objects.requireNonNullElse(size, TEXT_FONT_SIZE)));
         }
         this.draw.setColor(color != null ? color : Color.BLACK);
         FontMetrics metrics = this.draw.getFontMetrics();

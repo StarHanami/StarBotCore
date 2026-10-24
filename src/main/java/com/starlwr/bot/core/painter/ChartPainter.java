@@ -1,20 +1,22 @@
 package com.starlwr.bot.core.painter;
 
 import com.starlwr.bot.core.util.ImageUtil;
-import com.starlwr.bot.core.util.StringUtil;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.util.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import java.awt.*;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
+import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -321,20 +323,36 @@ public class ChartPainter {
         draw.setColor(Color.WHITE);
         draw.fillRect(0, 0, width, height);
 
+        draw.setFont(font);
+        FontMetrics metrics = draw.getFontMetrics();
+        double first = Math.ceil(yMin / step) * step;
+        int tickCount = (int) ((yMax - first) / step) + 1;
+        List<String> tickLabels = new ArrayList<>(tickCount);
         int left = 72;
-        int right = 24;
+        // 按实际刻度文字宽度预留空间，文字两侧各留 8 像素
+        for (int index = 0; index < tickCount; index++) {
+            String label = format(first + step * index);
+            tickLabels.add(label);
+            left = Math.max(left, metrics.stringWidth(label) + 16);
+        }
+
+        List<String> timeLabels = new ArrayList<>(5);
+        for (int index = 0; index < 5; index++) {
+            double ratio = index / 4.0;
+            timeLabels.add(TIME_FORMAT.format(Instant.ofEpochMilli(start + (long) ((end - start) * ratio)).atZone(ZoneId.systemDefault())));
+        }
+
+        left = Math.max(left, metrics.stringWidth(timeLabels.get(0)) / 2 + 8);
+        int right = Math.max(24, metrics.stringWidth(timeLabels.get(4)) / 2 + 8);
         int top = 22;
-        int bottom = 58;
+        int bottom = Math.max(58, metrics.getHeight() + 20);
         int plotWidth = width - left - right;
         int plotHeight = height - top - bottom;
         int zeroY = yToPixel(0, yMin, yMax, top, plotHeight);
 
-        draw.setFont(font);
         draw.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, new float[]{5f, 5f}, 0f));
 
         // 绘制横向网格线与数值刻度，刻度步长取整且覆盖数据范围
-        double first = Math.ceil(yMin / step) * step;
-        int tickCount = (int) ((yMax - first) / step) + 1;
         for (int index = 0; index < tickCount; index++) {
             double value = first + step * index;
             int y = yToPixel(value, yMin, yMax, top, plotHeight);
@@ -343,20 +361,8 @@ public class ChartPainter {
             draw.drawLine(left, y, left + plotWidth, y);
 
             draw.setColor(Color.DARK_GRAY);
-            String label = format(value);
-            draw.drawString(label, left - draw.getFontMetrics().stringWidth(label) - 8, y + 5);
-        }
-
-        // 绘制纵向时间刻度
-        for (int index = 0; index < 5; index++) {
-            double ratio = index / 4.0;
-            int x = left + (int) (plotWidth * ratio);
-            String label = TIME_FORMAT.format(Instant.ofEpochMilli(start + (long) ((end - start) * ratio)).atZone(ZoneId.systemDefault()));
-
-            draw.setColor(Color.DARK_GRAY);
-            int labelX = Math.max(0, Math.min(width - draw.getFontMetrics().stringWidth(label),
-                    x - draw.getFontMetrics().stringWidth(label) / 2));
-            draw.drawString(label, labelX, height - 20);
+            String label = tickLabels.get(index);
+            draw.drawString(label, left - metrics.stringWidth(label) - 8, y + 5);
         }
 
         // 绘制坐标轴
@@ -453,6 +459,18 @@ public class ChartPainter {
             }
         }
         draw.draw(line);
+
+        // 绘制时间刻度
+        int labelY = top + plotHeight + 8 + metrics.getAscent();
+        draw.setColor(Color.DARK_GRAY);
+        for (int index = 0; index < 5; index++) {
+            double ratio = index / 4.0;
+            int x = left + (int) (plotWidth * ratio);
+            String label = timeLabels.get(index);
+            int labelWidth = metrics.stringWidth(label);
+            int labelX = Math.max(8, Math.min(width - labelWidth - 8, x - labelWidth / 2));
+            draw.drawString(label, labelX, labelY);
+        }
 
         draw.dispose();
         return Optional.of(image);
@@ -551,12 +569,12 @@ public class ChartPainter {
             int nameX = barX + BAR_OFFSET * 2;
             int baseline = y + textBaselineOffset;
 
-            if (StringUtil.isNotBlank(item.getName())) {
+            if (StringUtils.isNotBlank(item.getName())) {
                 draw.setColor(Color.BLACK);
                 draw.drawString(item.getName(), nameX, baseline);
             }
 
-            int nameWidth = StringUtil.isNotBlank(item.getName()) ? draw.getFontMetrics().stringWidth(item.getName()) : 0;
+            int nameWidth = StringUtils.isNotBlank(item.getName()) ? draw.getFontMetrics().stringWidth(item.getName()) : 0;
             int countX = Math.max(barWidth, barX + BAR_OFFSET * 3 + nameWidth);
             draw.setColor(Color.GRAY);
             draw.drawString(countText, countX, baseline);
@@ -620,11 +638,11 @@ public class ChartPainter {
 
             String countText = format(value);
             int baseline = y + textBaselineOffset;
-            int nameWidth = StringUtil.isNotBlank(item.getName()) ? draw.getFontMetrics().stringWidth(item.getName()) : 0;
+            int nameWidth = StringUtils.isNotBlank(item.getName()) ? draw.getFontMetrics().stringWidth(item.getName()) : 0;
 
             if (value >= 0) {
                 int nameX = barX + BAR_OFFSET * 2;
-                if (StringUtil.isNotBlank(item.getName())) {
+                if (StringUtils.isNotBlank(item.getName())) {
                     draw.setColor(Color.BLACK);
                     draw.drawString(item.getName(), nameX, baseline);
                 }
@@ -636,7 +654,7 @@ public class ChartPainter {
                 int countWidth = draw.getFontMetrics().stringWidth(countText);
 
                 int nameX = reverseBarX - BAR_OFFSET * 2 - nameWidth;
-                if (StringUtil.isNotBlank(item.getName())) {
+                if (StringUtils.isNotBlank(item.getName())) {
                     draw.setColor(Color.BLACK);
                     draw.drawString(item.getName(), nameX, baseline);
                 }
@@ -663,7 +681,7 @@ public class ChartPainter {
      * @return 分布图图片
      */
     public static Optional<BufferedImage> renderDistributionChart(@NonNull List<DistributionSlice> slices, int width, @NonNull Font font) {
-        if (slices.isEmpty()) {
+        if (CollectionUtils.isEmpty(slices)) {
             log.warn("绘制分布图失败, 数据列表不能为空");
             return Optional.empty();
         }
@@ -715,11 +733,11 @@ public class ChartPainter {
         for (int i = 0; i < count; i++) {
             int labelLimit = Math.max(maxRowWidth - 28 - rightWidths[i], 0);
             String rawLabel = slices.get(i).getLabel();
-            int rawLabelWidth = StringUtil.isNotBlank(rawLabel) ? metrics.stringWidth(rawLabel) : 0;
+            int rawLabelWidth = StringUtils.isNotBlank(rawLabel) ? metrics.stringWidth(rawLabel) : 0;
             // 计算完整标签宽度（不省略）与省略后宽度（独占一行仍放不下时使用）
             int fullItemWidth = 20 + rawLabelWidth + 8 + rightWidths[i];
             int fittedItemWidth = 20 + Math.min(rawLabelWidth, labelLimit) + 8 + rightWidths[i];
-            if (!currentRow.isEmpty() && lineX + fullItemWidth > legendRight) {
+            if (CollectionUtils.isNotEmpty(currentRow) && lineX + fullItemWidth > legendRight) {
                 // 当前行放不下完整标签，换行
                 rowGroups.add(currentRow);
                 currentRow = new ArrayList<>();
@@ -735,7 +753,7 @@ public class ChartPainter {
                 lineX += fullItemWidth + itemGap;
             }
         }
-        if (!currentRow.isEmpty()) {
+        if (CollectionUtils.isNotEmpty(currentRow)) {
             rowGroups.add(currentRow);
         }
         int legendTop = topSpace + barHeight + gap;
@@ -803,7 +821,7 @@ public class ChartPainter {
                 DistributionSlice slice = slices.get(idx);
                 String label = slice.getLabel();
                 int labelLimit = Math.max(maxRowWidth - 28 - rightWidths[idx], 0);
-                if (StringUtil.isNotBlank(label) && metrics.stringWidth(label) > labelLimit) {
+                if (StringUtils.isNotBlank(label) && metrics.stringWidth(label) > labelLimit) {
                     label = limitLabel(draw, label, itemX + 20, itemX + 20 + labelLimit);
                 }
                 int labelWidth = legendLabelWidth(metrics, label, labelLimit);
@@ -811,7 +829,7 @@ public class ChartPainter {
 
                 draw.setColor(PALETTE[idx % PALETTE.length]);
                 draw.fillOval(itemX, legendY - (int) (draw.getFontMetrics().getAscent() * 0.45) - 6, 12, 12);
-                if (StringUtil.isNotBlank(label)) {
+                if (StringUtils.isNotBlank(label)) {
                     draw.setColor(Color.BLACK);
                     draw.drawString(label, itemX + 20, legendY);
                 }
@@ -862,31 +880,24 @@ public class ChartPainter {
      * @return 分桶聚合结果
      */
     private static double[] divide(List<LinePoint> samples, long start, long end, boolean cumulative, int bucketCount) {
-        double[] result = new double[bucketCount];
+        BigDecimal[] buckets = new BigDecimal[bucketCount];
+        Arrays.fill(buckets, BigDecimal.ZERO);
         long duration = end - start;
 
         for (LinePoint sample : samples) {
             long timestamp = sample.getTimestamp();
             if (timestamp >= start && timestamp <= end) {
                 int index = (int) Math.min(Math.max((timestamp - start) * bucketCount / duration, 0), bucketCount - 1);
-                result[index] += sample.getValue();
+                buckets[index] = buckets[index].add(BigDecimal.valueOf(sample.getValue()));
             }
         }
 
         // 累计模式转换为前缀和，末位元素即为全部样本的累计总和；非累计模式保持各桶实际数值
-        if (cumulative) {
-            double[] cumulativeValues = new double[bucketCount + 1];
-            double total = 0;
-            for (int index = 0; index < bucketCount; index++) {
-                total += result[index];
-                cumulativeValues[index + 1] = total;
-            }
-            result = cumulativeValues;
-        } else {
-            double[] interactionValues = new double[bucketCount + 1];
-            interactionValues[0] = 0;
-            System.arraycopy(result, 0, interactionValues, 1, bucketCount);
-            result = interactionValues;
+        double[] result = new double[bucketCount + 1];
+        BigDecimal total = BigDecimal.ZERO;
+        for (int index = 0; index < bucketCount; index++) {
+            total = cumulative ? total.add(buckets[index]) : buckets[index];
+            result[index + 1] = total.doubleValue();
         }
 
         return result;
@@ -907,7 +918,7 @@ public class ChartPainter {
 
         List<Point2D.Double> points = new ArrayList<>();
         double duration = end - start;
-        double running = 0;
+        BigDecimal running = BigDecimal.ZERO;
 
         if (cumulative) {
             points.add(new Point2D.Double(0.0, 0.0));
@@ -916,8 +927,8 @@ public class ChartPainter {
         for (LinePoint sample : sorted) {
             double value = sample.getValue();
             if (cumulative) {
-                running += value;
-                value = running;
+                running = running.add(BigDecimal.valueOf(value));
+                value = running.doubleValue();
             }
             double x = Math.max(0, Math.min(1, (double) (sample.getTimestamp() - start) / duration));
             points.add(new Point2D.Double(x, value));
@@ -1135,7 +1146,7 @@ public class ChartPainter {
      * @return 标签显示宽度
      */
     private static int legendLabelWidth(FontMetrics metrics, String label, int labelLimit) {
-        if (!StringUtil.isNotBlank(label)) {
+        if (StringUtils.isBlank(label)) {
             return 0;
         }
         return Math.min(metrics.stringWidth(label), labelLimit);
