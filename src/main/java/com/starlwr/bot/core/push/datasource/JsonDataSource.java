@@ -18,8 +18,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.SetUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.*;
@@ -38,10 +38,9 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * JSON 数据源
  */
-@Profile("json")
 @Slf4j
 @Service
-@DataSource(name = "json")
+@ConditionalOnProperty(name = "starbot.core.datasource.type", havingValue = "json", matchIfMissing = true)
 public class JsonDataSource extends AbstractDataSource implements JsonDataSourceManagementService {
     private final StarBotCoreProperties properties;
 
@@ -69,6 +68,11 @@ public class JsonDataSource extends AbstractDataSource implements JsonDataSource
         super(eventPublisher, dataSourceServiceRegistry, handlerService);
         this.properties = properties;
         this.handlerService = handlerService;
+    }
+
+    @Override
+    public String getName() {
+        return "json";
     }
 
     /**
