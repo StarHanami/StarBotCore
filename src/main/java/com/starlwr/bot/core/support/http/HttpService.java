@@ -54,6 +54,16 @@ public class HttpService {
     }
 
     /**
+     * Freeze request headers before handing work to the executor. In particular,
+     * a caller switching its Cookie header must not change an already queued request.
+     * Header names and values are immutable Strings, so a shallow copy is sufficient.
+     */
+    private static Map<String, String> snapshotHeaders(Map<String, String> headers) {
+        // Preserve existing async failure/Optional behavior for a null header map.
+        return headers == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(headers));
+    }
+
+    /**
      * 获取随机用户代理字符串
      *
      * @return 随机用户代理字符串
@@ -169,7 +179,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<String> asyncGet(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> get(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> get(url, headerSnapshot), executor);
     }
 
     /**
@@ -196,7 +207,8 @@ public class HttpService {
      * @return 完整响应
      */
     public CompletableFuture<ResponseEntity<String>> asyncGetForEntity(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> getForEntity(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> getForEntity(url, headerSnapshot), executor);
     }
 
     /**
@@ -238,7 +250,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<JSONObject> asyncGetJson(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> getJson(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> getJson(url, headerSnapshot), executor);
     }
 
     /**
@@ -281,7 +294,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<byte[]> asyncGetBytes(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> getBytes(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> getBytes(url, headerSnapshot), executor);
     }
 
     /**
@@ -330,7 +344,8 @@ public class HttpService {
      * @return 图片
      */
     public CompletableFuture<Optional<BufferedImage>> asyncGetBufferedImage(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> getBufferedImage(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> getBufferedImage(url, headerSnapshot), executor);
     }
 
     /**
@@ -372,7 +387,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<String> asyncPostWithHeaders(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> postWithHeaders(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postWithHeaders(url, headerSnapshot), executor);
     }
 
     /**
@@ -424,7 +440,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<String> asyncPost(String url, Map<String, String> headers, Object params) {
-        return CompletableFuture.supplyAsync(() -> post(url, headers, params), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> post(url, headerSnapshot, params), executor);
     }
 
     /**
@@ -454,7 +471,8 @@ public class HttpService {
      * @return 完整响应
      */
     public CompletableFuture<ResponseEntity<String>> asyncPostForEntity(String url, Map<String, String> headers, Object params) {
-        return CompletableFuture.supplyAsync(() -> postForEntity(url, headers, params), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postForEntity(url, headerSnapshot, params), executor);
     }
 
     /**
@@ -496,7 +514,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<JSONObject> asyncPostJsonWithHeaders(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> postJsonWithHeaders(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postJsonWithHeaders(url, headerSnapshot), executor);
     }
 
     /**
@@ -542,7 +561,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<JSONObject> asyncPostJson(String url, Map<String, String> headers, Object params) {
-        return CompletableFuture.supplyAsync(() -> postJson(url, headers, params), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postJson(url, headerSnapshot, params), executor);
     }
 
     /**
@@ -584,7 +604,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<String> asyncPostWithHeadersAsForm(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> postWithHeadersAsForm(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postWithHeadersAsForm(url, headerSnapshot), executor);
     }
 
     /**
@@ -638,7 +659,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<String> asyncPostAsForm(String url, Map<String, String> headers, Map<String, Object> params) {
-        return CompletableFuture.supplyAsync(() -> postAsForm(url, headers, params), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postAsForm(url, headerSnapshot, params), executor);
     }
 
     /**
@@ -680,7 +702,8 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<JSONObject> asyncPostJsonWithHeadersAsForm(String url, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> postJsonWithHeadersAsForm(url, headers), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postJsonWithHeadersAsForm(url, headerSnapshot), executor);
     }
 
     /**
@@ -726,6 +749,7 @@ public class HttpService {
      * @return 请求结果
      */
     public CompletableFuture<JSONObject> asyncPostJsonAsForm(String url, Map<String, String> headers, Map<String, Object> params) {
-        return CompletableFuture.supplyAsync(() -> postJsonAsForm(url, headers, params), executor);
+        Map<String, String> headerSnapshot = snapshotHeaders(headers);
+        return CompletableFuture.supplyAsync(() -> postJsonAsForm(url, headerSnapshot, params), executor);
     }
 }
